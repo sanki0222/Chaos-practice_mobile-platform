@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tilted Bifurcation</title>
+  <script src="https://unpkg.com/tone@14.7.77/build/Tone.js"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #111;
+      color: #eee;
+      padding: 24px;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      color: #bbb;
+      line-height: 1.5;
+    }
+
+    button {
+      font-size: 18px;
+      padding: 12px 18px;
+      margin-top: 16px;
+      margin-bottom: 20px;
+      border: none;
+      border-radius: 8px;
+      background: #eee;
+      color: #111;
+    }
+
+    .panel {
+      background: #1b1b1b;
+      border-radius: 12px;
+      padding: 16px;
+      margin-top: 16px;
+    }
+
+    .row {
+      margin-bottom: 10px;
+      font-size: 16px;
+    }
+
+    .label {
+      color: #888;
+      display: inline-block;
+      width: 90px;
+    }
+
+    #state {
+      font-weight: bold;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      max-width: 700px;
+      height: 220px;
+      background: #000;
+      border-radius: 12px;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Tilted Bifurcation</h1>
+  <p>
+    Tilt the phone to change the control parameter of a chaotic pitch system.
+    Small tilt = stable behaviour. Larger tilt = bifurcation and chaos.
+  </p>
+
+  <button id="startBtn">Start</button>
+
+  <div class="panel">
+    <div class="row"><span class="label">beta:</span> <span id="betaVal">0</span></div>
+    <div class="row"><span class="label">r:</span> <span id="rVal">3.00</span></div>
+    <div class="row"><span class="label">x:</span> <span id="xVal">0.50</span></div>
+    <div class="row"><span class="label">freq:</span> <span id="freqVal">440</span></div>
+    <div class="row"><span class="label">state:</span> <span id="state">waiting</span></div>
+  </div>
+
+  <canvas id="canvas" width="700" height="220"></canvas>
+
+  <script>
+    // -----------------------------
+    // UI elements
+    // -----------------------------
+    const startBtn = document.getElementById("startBtn");
+    const betaVal = document.getElementById("betaVal");
+    const rVal = document.getElementById("rVal");
+    const xVal = document.getElementById("xVal");
+    const freqVal = document.getElementById("freqVal");
+    const stateEl = document.getElementById("state");
+
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    // -----------------------------
+    // Chaos system variables
+    // -----------------------------
+    let beta = 0;          // phone tilt
+    let targetR = 3.0;     // target chaos parameter from sensor
+    let r = 3.0;           // smoothed chaos parameter
+    let x = 0.5;           // logistic map state
+    let started = false;
+    let loopId = null;
+
+    // for visual history
+    const history = [];
+
+    // -----------------------------
+    // Tone.js audio objects
+    // -----------------------------
+    let synth;
+    let drone;
+    let filter;
+
+    // -----------------------------
+    // Helper functions
+    // -----------------------------
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function mapRange(value, inMin, inMax, outMin, outMax) {
+      const v = clamp(value, inMin, inMax);
+      return outMin + ((v - inMin) / (inMax - inMin)) * (outMax - outMin);
+    }
+
+    function classifyState(rValue) {
+      if (rValue < 3.0) return "stable";
+      if (rValue < 3.45) return "periodic / bifurcation";
+      if (rValue < 3.7) return "complex periodic";
+      return "chaotic";
+    }
+
+    function logisticStep() {
+      x = r * x * (1 - x);
+
+      // 避免数值极端跑飞
+      x = clamp(x, 0.0001, 0.9999);
+      return x;
+    }
+
+    // -----------------------------
+    // Visual
+    // -----------------------------
+    function drawGraph() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // background line
+      ctx.strokeStyle = "#222";
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height / 2);
+      ctx.lineTo(canvas.width, canvas.height / 2);
+      ctx.stroke();
+
+      // draw history
+      ctx.strokeStyle = "#00ffcc";
+      ctx.beginPath();
+
+      for (let i = 0; i < history.length; i++) {
+        const px = i;
+        const py = canvas.height - history[i] * canvas.height;
+
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+
+      ctx.stroke();
+
+      // text
+      ctx.fillStyle = "#888";
+      ctx.font = "14px Arial";
+      ctx.fillText("logistic x history", 12, 20);
+    }
+
+    // -----------------------------
+    // Audio engine
+    // -----------------------------
+    async function startAudio() {
+      await Tone.start();
+
+      filter = new Tone.Filter({
+        type: "lowpass",
+        frequency: 1200,
+        Q: 1
+      }).toDestination();
+
+      synth = new Tone.Oscillator({
+        frequency: 440,
+        type: "sine",
+        volume: -10
+      }).connect(filter);
+
+      drone = new Tone.Oscillator({
+        frequency: 110,
+        type: "triangle",
+        volume: -22
+      }).connect(filter);
+
+      synth.start();
+      drone.start();
+    }
+
+    function updateSound() {
+      // 平滑 r，避免声音抖得太厉害
+      r += (targetR - r) * 0.08;
+
+      // 迭代 logistic map
+      const currentX = logisticStep();
+
+      // x -> frequency
+      const freq = 220 + currentX * 660;
+
+      // 让主音高跟随 x
+      synth.frequency.rampTo(freq, 0.08);
+
+      // 让 filter 也稍微受 gamma-like system behaviour 影响
+      const cutoff = 400 + currentX * 2000;
+      filter.frequency.rampTo(cutoff, 0.08);
+
+      // 低音 drone 跟随 r 稍微变化
+      const droneFreq = 80 + (r - 2.8) * 60;
+      drone.frequency.rampTo(droneFreq, 0.1);
+
+      // update text
+      betaVal.textContent = beta.toFixed(2);
+      rVal.textContent = r.toFixed(3);
+      xVal.textContent = currentX.toFixed(4);
+      freqVal.textContent = freq.toFixed(1) + " Hz";
+      stateEl.textContent = classifyState(r);
+
+      // update graph history
+      history.push(currentX);
+      if (history.length > canvas.width) history.shift();
+
+      drawGraph();
+    }
+
+    // -----------------------------
+    // Sensor handling
+    // -----------------------------
+    function onOrientation(event) {
+      // beta roughly front/back tilt
+      const rawBeta = event.beta ?? 0;
+
+      // 限制在更实用的范围，避免映射太夸张
+      beta = clamp(rawBeta, -45, 45);
+
+      // beta -> r
+      // -45 到 45 映射到 2.8 到 4.0
+      targetR = mapRange(beta, -45, 45, 2.8, 4.0);
+    }
+
+    async function enableOrientation() {
+      // iPhone / iPad 需要用户授权
+      if (
+        typeof DeviceOrientationEvent !== "undefined" &&
+        typeof DeviceOrientationEvent.requestPermission === "function"
+      ) {
+        try {
+          const permission = await DeviceOrientationEvent.requestPermission();
+          if (permission !== "granted") {
+            alert("Sensor permission was not granted.");
+            return false;
+          }
+        } catch (err) {
+          alert("Permission error: " + err.message);
+          return false;
+        }
+      }
+
+      window.addEventListener("deviceorientation", onOrientation);
+      return true;
+    }
+
+    // -----------------------------
+    // Main start
+    // -----------------------------
+    startBtn.addEventListener("click", async () => {
+      if (started) return;
+
+      const ok = await enableOrientation();
+      if (!ok) return;
+
+      await startAudio();
+
+      // 每 120ms 更新一次，比较容易听出分裂感
+      loopId = setInterval(updateSound, 120);
+
+      started = true;
+      stateEl.textContent = "running";
+      startBtn.textContent = "Running";
+      startBtn.disabled = true;
+    });
+  </script>
+</body>
+</html>
