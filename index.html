@@ -97,7 +97,7 @@
 
   <div class="buttons">
     <button id="startBtn">Start</button>
-    <button id="stopBtn" disabled>Stop</button>
+    <button id="pauseBtn" disabled>Pause</button>
     <button id="restartBtn" disabled>Restart</button>
   </div>
 
@@ -114,7 +114,7 @@
 
   <script>
     const startBtn = document.getElementById("startBtn");
-    const stopBtn = document.getElementById("stopBtn");
+    const pauseBtn = document.getElementById("pauseBtn");
     const restartBtn = document.getElementById("restartBtn");
 
     const betaVal = document.getElementById("betaVal");
@@ -207,7 +207,7 @@
     ctx.fillRect(p.px, p.py, 2, 2);
   }
 
-  // stright line of r
+  // straight line of r
   const currentPx = mapRange(r, 2.8, 4.0, 0, canvas.width);
   ctx.fillStyle = "rgba(255,255,255,0.2)";
   ctx.fillRect(currentPx, 0, 1, canvas.height);
@@ -229,6 +229,28 @@
       beta = clamp(rawBeta, -45, 45);
       targetR = mapRange(beta, -45, 45, 2.8, 4.0);
     }
+
+    function togglePause() {
+
+    if (running) {
+
+    running = false;
+
+    pauseBtn.textContent = "Continue";
+
+    stateEl.textContent = "paused";
+
+  } else {
+
+    running = true;
+
+    pauseBtn.textContent = "Pause";
+
+    stateEl.textContent = "running";
+
+  }
+
+}
 
     async function enableOrientation() {
       if (sensorEnabled) return true;
@@ -402,22 +424,22 @@
       }, 120);
     }
 
-    function stopInstrument() {
-      running = false;
-      if (intervalId) {
-        clearInterval(intervalId);
-        intervalId = null;
-      }
-      if (intervalWatcher) {
-        clearInterval(intervalWatcher);
-        intervalWatcher = null;
-      }
+    // function stopInstrument() {
+    //   running = false;
+    //   if (intervalId) {
+    //     clearInterval(intervalId);
+    //     intervalId = null;
+    //   }
+    //   if (intervalWatcher) {
+    //     clearInterval(intervalWatcher);
+    //     intervalWatcher = null;
+    //   }
 
-      stateEl.textContent = "stopped";
-      stopBtn.disabled = true;
-      restartBtn.disabled = false;
-      startBtn.disabled = true;
-    }
+    //   stateEl.textContent = "stopped";
+    //   pauseBtn.disabled = true;
+    //   restartBtn.disabled = false;
+    //   startBtn.disabled = true;
+    // }
 
     function restartInstrument() {
       x = 0.5;
@@ -430,7 +452,7 @@
       startMainLoop();
 
       stateEl.textContent = "running";
-      stopBtn.disabled = false;
+      pauseBtn.disabled = false;
       restartBtn.disabled = false;
       startBtn.disabled = true;
     }
@@ -447,16 +469,18 @@
       running = true;
 
       startBtn.disabled = true;
-      stopBtn.disabled = false;
+      pauseBtn.disabled = false;
       restartBtn.disabled = false;
 
       stateEl.textContent = "running";
+      pauseBtn.textContent = "Pause";
+      
       startMainLoop();
     });
 
-    stopBtn.addEventListener("click", () => {
-      if (!started || !running) return;
-      stopInstrument();
+    pauseBtn.addEventListener("click", () => {
+      if (!started) return;
+      togglePause();
     });
 
     restartBtn.addEventListener("click", () => {
