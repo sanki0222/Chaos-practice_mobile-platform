@@ -136,7 +136,7 @@
     let intervalId = null;
     let sensorEnabled = false;
 
-    const history = [];
+    const points = [];
 
     let reverb, feedbackDelay, filter;
     let synthA, synthB, drone;
@@ -176,41 +176,53 @@
     }
 
     function drawGraph() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // horizontal guides
-      ctx.strokeStyle = "#151515";
-      for (let i = 1; i < 5; i++) {
-        const y = (canvas.height / 5) * i;
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
-        ctx.stroke();
-      }
+  // Background reference lines
+  ctx.strokeStyle = "#111";
+  ctx.lineWidth = 1;
 
-      // waveform/history
-      ctx.strokeStyle = "#00ffd0";
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
+  // Horizontal reference line
+  for (let i = 1; i < 5; i++) {
+    const y = (canvas.height / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
+    ctx.stroke();
+  }
 
-      for (let i = 0; i < history.length; i++) {
-        const px = i;
-        const py = canvas.height - history[i] * canvas.height;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.stroke();
+  // Vertical reference line
+  for (let i = 1; i < 5; i++) {
+    const xLine = (canvas.width / 5) * i;
+    ctx.beginPath();
+    ctx.moveTo(xLine, 0);
+    ctx.lineTo(xLine, canvas.height);
+    ctx.stroke();
+  }
 
-      // current bifurcation-ish column
-      const columnX = canvas.width - 40;
-      ctx.fillStyle = "rgba(255,255,255,0.18)";
-      ctx.fillRect(columnX, 0, 1, canvas.height);
+  // bifurcation point
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    ctx.fillStyle = "rgba(0,255,210,0.22)";
+    ctx.fillRect(p.px, p.py, 2, 2);
+  }
 
-      ctx.fillStyle = "#888";
-      ctx.font = "14px Arial";
-      ctx.fillText("logistic state history", 12, 20);
-      ctx.fillText("current r: " + r.toFixed(3), 12, 40);
-    }
+  // stright line of r
+  const currentPx = mapRange(r, 2.8, 4.0, 0, canvas.width);
+  ctx.fillStyle = "rgba(255,255,255,0.2)";
+  ctx.fillRect(currentPx, 0, 1, canvas.height);
+
+  // point of x
+  const currentPy = canvas.height - x * canvas.height;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(currentPx - 2, currentPy - 2, 4, 4);
+
+  // text
+  ctx.fillStyle = "#888";
+  ctx.font = "14px Arial";
+  ctx.fillText("bifurcation diagram", 12, 20);
+  ctx.fillText("r: " + r.toFixed(3), 12, 40);
+}
 
     function onOrientation(event) {
       const rawBeta = event.beta ?? 0;
@@ -351,8 +363,12 @@
       feedbackDelay.feedback.rampTo(mapRange(r, 2.8, 4.0, 0.18, 0.42), 0.08);
       feedbackDelay.wet.rampTo(mapRange(r, 2.8, 4.0, 0.12, 0.32), 0.08);
 
-      history.push(currentX);
-      if (history.length > canvas.width) history.shift();
+      const px = mapRange(r, 2.8, 4.0, 0, canvas.width);
+      const py = canvas.height - currentX * canvas.height;
+
+      points.push({ px, py });
+
+      if (points.length > 3500) points.shift();
 
       updateUI(freqA, state);
       drawGraph();
@@ -407,7 +423,7 @@
       x = 0.5;
       r = 3.0;
       targetR = 3.0;
-      history.length = 0;
+      points.length = 0;
 
       running = true;
       currentIntervalTarget = 220;
