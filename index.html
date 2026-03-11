@@ -9,7 +9,7 @@
     body {
       margin: 0;
       font-family: Arial, sans-serif;
-      background: #111;
+      background: #0d0d0d;
       color: #eee;
       padding: 24px;
     }
@@ -20,26 +20,39 @@
     }
 
     p {
-      color: #bbb;
+      color: #aaa;
       line-height: 1.5;
+      max-width: 720px;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 12px;
+      margin-top: 18px;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
     }
 
     button {
       font-size: 18px;
       padding: 12px 18px;
-      margin-top: 16px;
-      margin-bottom: 20px;
       border: none;
-      border-radius: 8px;
-      background: #eee;
+      border-radius: 10px;
+      background: #e6e6e6;
       color: #111;
+      min-width: 110px;
+    }
+
+    button:disabled {
+      opacity: 0.45;
     }
 
     .panel {
-      background: #1b1b1b;
-      border-radius: 12px;
+      background: #151515;
+      border-radius: 14px;
       padding: 16px;
-      margin-top: 16px;
+      margin-top: 14px;
+      max-width: 760px;
     }
 
     .row {
@@ -50,7 +63,7 @@
     .label {
       color: #888;
       display: inline-block;
-      width: 90px;
+      width: 110px;
     }
 
     #state {
@@ -60,38 +73,50 @@
     canvas {
       display: block;
       width: 100%;
-      max-width: 700px;
-      height: 220px;
+      max-width: 760px;
+      height: 260px;
       background: #000;
-      border-radius: 12px;
+      border-radius: 14px;
       margin-top: 16px;
+    }
+
+    .hint {
+      font-size: 14px;
+      color: #777;
+      margin-top: 12px;
     }
   </style>
 </head>
 <body>
   <h1>Tilted Bifurcation</h1>
   <p>
-    Tilt the phone to change the control parameter of a chaotic pitch system.
-    Small tilt = stable behaviour. Larger tilt = bifurcation and chaos.
+    Tilt the phone to perturb the control parameter of a chaotic musical system.
+    Small tilt produces relatively stable behaviour. Larger tilt pushes the system
+    toward bifurcation and chaos.
   </p>
 
-  <button id="startBtn">Start</button>
+  <div class="buttons">
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <button id="restartBtn" disabled>Restart</button>
+  </div>
 
   <div class="panel">
     <div class="row"><span class="label">beta:</span> <span id="betaVal">0</span></div>
     <div class="row"><span class="label">r:</span> <span id="rVal">3.00</span></div>
     <div class="row"><span class="label">x:</span> <span id="xVal">0.50</span></div>
-    <div class="row"><span class="label">freq:</span> <span id="freqVal">440</span></div>
+    <div class="row"><span class="label">pitch:</span> <span id="freqVal">-</span></div>
     <div class="row"><span class="label">state:</span> <span id="state">waiting</span></div>
   </div>
 
-  <canvas id="canvas" width="700" height="220"></canvas>
+  <canvas id="canvas" width="760" height="260"></canvas>
+  <div class="hint">Use headphones and tilt the phone slowly.</div>
 
   <script>
-    // -----------------------------
-    // UI elements
-    // -----------------------------
     const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const restartBtn = document.getElementById("restartBtn");
+
     const betaVal = document.getElementById("betaVal");
     const rVal = document.getElementById("rVal");
     const xVal = document.getElementById("xVal");
@@ -101,29 +126,28 @@
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
 
-    // -----------------------------
-    // Chaos system variables
-    // -----------------------------
-    let beta = 0;          // phone tilt
-    let targetR = 3.0;     // target chaos parameter from sensor
-    let r = 3.0;           // smoothed chaos parameter
-    let x = 0.5;           // logistic map state
-    let started = false;
-    let loopId = null;
+    let beta = 0;
+    let targetR = 3.0;
+    let r = 3.0;
+    let x = 0.5;
 
-    // for visual history
+    let started = false;
+    let running = false;
+    let intervalId = null;
+    let sensorEnabled = false;
+
     const history = [];
 
-    // -----------------------------
-    // Tone.js audio objects
-    // -----------------------------
-    let synth;
-    let drone;
-    let filter;
+    let reverb, feedbackDelay, filter;
+    let synthA, synthB, drone;
 
-    // -----------------------------
-    // Helper functions
-    // -----------------------------
+    // minor-ish pitch pool, good for darker / more unstable feeling
+    const scale = [
+      110, 123.47, 130.81, 146.83, 164.81, 174.61, 196.00,
+      220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00,
+      440.00, 493.88, 523.25, 587.33, 659.25, 698.46, 783.99
+    ];
+
     function clamp(value, min, max) {
       return Math.max(min, Math.min(max, value));
     }
@@ -135,132 +159,68 @@
 
     function classifyState(rValue) {
       if (rValue < 3.0) return "stable";
-      if (rValue < 3.45) return "periodic / bifurcation";
+      if (rValue < 3.45) return "bifurcation";
       if (rValue < 3.7) return "complex periodic";
       return "chaotic";
     }
 
     function logisticStep() {
       x = r * x * (1 - x);
-
-      // 避免数值极端跑飞
       x = clamp(x, 0.0001, 0.9999);
       return x;
     }
 
-    // -----------------------------
-    // Visual
-    // -----------------------------
+    function quantizePitch(value01) {
+      const idx = Math.floor(value01 * scale.length);
+      return scale[Math.min(idx, scale.length - 1)];
+    }
+
     function drawGraph() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // background line
-      ctx.strokeStyle = "#222";
-      ctx.beginPath();
-      ctx.moveTo(0, canvas.height / 2);
-      ctx.lineTo(canvas.width, canvas.height / 2);
-      ctx.stroke();
+      // horizontal guides
+      ctx.strokeStyle = "#151515";
+      for (let i = 1; i < 5; i++) {
+        const y = (canvas.height / 5) * i;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
 
-      // draw history
-      ctx.strokeStyle = "#00ffcc";
+      // waveform/history
+      ctx.strokeStyle = "#00ffd0";
+      ctx.lineWidth = 1.4;
       ctx.beginPath();
 
       for (let i = 0; i < history.length; i++) {
         const px = i;
         const py = canvas.height - history[i] * canvas.height;
-
         if (i === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       }
-
       ctx.stroke();
 
-      // text
+      // current bifurcation-ish column
+      const columnX = canvas.width - 40;
+      ctx.fillStyle = "rgba(255,255,255,0.18)";
+      ctx.fillRect(columnX, 0, 1, canvas.height);
+
       ctx.fillStyle = "#888";
       ctx.font = "14px Arial";
-      ctx.fillText("logistic x history", 12, 20);
+      ctx.fillText("logistic state history", 12, 20);
+      ctx.fillText("current r: " + r.toFixed(3), 12, 40);
     }
 
-    // -----------------------------
-    // Audio engine
-    // -----------------------------
-    async function startAudio() {
-      await Tone.start();
-
-      filter = new Tone.Filter({
-        type: "lowpass",
-        frequency: 1200,
-        Q: 1
-      }).toDestination();
-
-      synth = new Tone.Oscillator({
-        frequency: 440,
-        type: "sine",
-        volume: -10
-      }).connect(filter);
-
-      drone = new Tone.Oscillator({
-        frequency: 110,
-        type: "triangle",
-        volume: -22
-      }).connect(filter);
-
-      synth.start();
-      drone.start();
-    }
-
-    function updateSound() {
-      // 平滑 r，避免声音抖得太厉害
-      r += (targetR - r) * 0.08;
-
-      // 迭代 logistic map
-      const currentX = logisticStep();
-
-      // x -> frequency
-      const freq = 220 + currentX * 660;
-
-      // 让主音高跟随 x
-      synth.frequency.rampTo(freq, 0.08);
-
-      // 让 filter 也稍微受 gamma-like system behaviour 影响
-      const cutoff = 400 + currentX * 2000;
-      filter.frequency.rampTo(cutoff, 0.08);
-
-      // 低音 drone 跟随 r 稍微变化
-      const droneFreq = 80 + (r - 2.8) * 60;
-      drone.frequency.rampTo(droneFreq, 0.1);
-
-      // update text
-      betaVal.textContent = beta.toFixed(2);
-      rVal.textContent = r.toFixed(3);
-      xVal.textContent = currentX.toFixed(4);
-      freqVal.textContent = freq.toFixed(1) + " Hz";
-      stateEl.textContent = classifyState(r);
-
-      // update graph history
-      history.push(currentX);
-      if (history.length > canvas.width) history.shift();
-
-      drawGraph();
-    }
-
-    // -----------------------------
-    // Sensor handling
-    // -----------------------------
     function onOrientation(event) {
-      // beta roughly front/back tilt
       const rawBeta = event.beta ?? 0;
-
-      // 限制在更实用的范围，避免映射太夸张
       beta = clamp(rawBeta, -45, 45);
-
-      // beta -> r
-      // -45 到 45 映射到 2.8 到 4.0
       targetR = mapRange(beta, -45, 45, 2.8, 4.0);
     }
 
     async function enableOrientation() {
-      // iPhone / iPad 需要用户授权
+      if (sensorEnabled) return true;
+
       if (
         typeof DeviceOrientationEvent !== "undefined" &&
         typeof DeviceOrientationEvent.requestPermission === "function"
@@ -278,27 +238,214 @@
       }
 
       window.addEventListener("deviceorientation", onOrientation);
+      sensorEnabled = true;
       return true;
     }
 
-    // -----------------------------
-    // Main start
-    // -----------------------------
+    async function setupAudio() {
+      await Tone.start();
+
+      reverb = new Tone.Reverb({
+        decay: 3.5,
+        wet: 0.18
+      });
+
+      feedbackDelay = new Tone.FeedbackDelay({
+        delayTime: 0.18,
+        feedback: 0.28,
+        wet: 0.22
+      });
+
+      filter = new Tone.Filter({
+        type: "lowpass",
+        frequency: 1400,
+        Q: 1.2
+      });
+
+      const master = new Tone.Gain(0.9).toDestination();
+      reverb.connect(feedbackDelay);
+      feedbackDelay.connect(filter);
+      filter.connect(master);
+
+      synthA = new Tone.Synth({
+        oscillator: { type: "triangle" },
+        envelope: {
+          attack: 0.01,
+          decay: 0.08,
+          sustain: 0.12,
+          release: 0.2
+        }
+      }).connect(reverb);
+
+      synthB = new Tone.Synth({
+        oscillator: { type: "sine" },
+        envelope: {
+          attack: 0.005,
+          decay: 0.06,
+          sustain: 0.08,
+          release: 0.16
+        }
+      }).connect(reverb);
+
+      drone = new Tone.Oscillator({
+        frequency: 55,
+        type: "sine",
+        volume: -24
+      }).connect(reverb);
+
+      drone.start();
+    }
+
+    function updateUI(freqA, state) {
+      betaVal.textContent = beta.toFixed(2);
+      rVal.textContent = r.toFixed(3);
+      xVal.textContent = x.toFixed(4);
+      freqVal.textContent = freqA ? freqA.toFixed(2) + " Hz" : "-";
+      stateEl.textContent = state;
+    }
+
+    function tick() {
+      if (!running) return;
+
+      // smooth the control parameter
+      r += (targetR - r) * 0.08;
+
+      const currentX = logisticStep();
+      const state = classifyState(r);
+
+      // main pitch from current x
+      const freqA = quantizePitch(currentX);
+
+      // second voice from transformed x
+      const shadowX = clamp((currentX * currentX + (1 - currentX) * 0.25), 0, 1);
+      const freqB = quantizePitch(shadowX) * 1.5;
+
+      // more chaotic = faster triggering
+      let intervalMs;
+      if (r < 3.0) intervalMs = 320;
+      else if (r < 3.45) intervalMs = 220;
+      else if (r < 3.7) intervalMs = 160;
+      else intervalMs = 95;
+
+      // this gets updated later by resetting the interval when needed
+      currentIntervalTarget = intervalMs;
+
+      // trigger notes
+      const velA = mapRange(r, 2.8, 4.0, 0.45, 0.9);
+      const velB = mapRange(r, 2.8, 4.0, 0.18, 0.5);
+
+      synthA.triggerAttackRelease(freqA, "16n", undefined, velA);
+
+      // second voice appears more strongly in higher-chaos regions
+      if (r > 3.15) {
+        synthB.triggerAttackRelease(freqB, "32n", undefined, velB);
+      }
+
+      // drone and filter follow system behaviour
+      const droneFreq = 45 + (r - 2.8) * 22;
+      drone.frequency.rampTo(droneFreq, 0.08);
+
+      const cutoff = 500 + currentX * 2400;
+      filter.frequency.rampTo(cutoff, 0.06);
+
+      feedbackDelay.feedback.rampTo(mapRange(r, 2.8, 4.0, 0.18, 0.42), 0.08);
+      feedbackDelay.wet.rampTo(mapRange(r, 2.8, 4.0, 0.12, 0.32), 0.08);
+
+      history.push(currentX);
+      if (history.length > canvas.width) history.shift();
+
+      updateUI(freqA, state);
+      drawGraph();
+    }
+
+    let currentIntervalTarget = 220;
+    let intervalWatcher = null;
+
+    function startMainLoop() {
+      if (intervalId) clearInterval(intervalId);
+      intervalId = setInterval(tick, currentIntervalTarget);
+
+      if (intervalWatcher) clearInterval(intervalWatcher);
+      intervalWatcher = setInterval(() => {
+        if (!running) return;
+        const activeDelay = intervalId ? true : false;
+        if (!activeDelay) return;
+
+        // adapt trigger speed to current chaos state
+        let wanted;
+        if (r < 3.0) wanted = 320;
+        else if (r < 3.45) wanted = 220;
+        else if (r < 3.7) wanted = 160;
+        else wanted = 95;
+
+        if (wanted !== currentIntervalTarget) {
+          currentIntervalTarget = wanted;
+          clearInterval(intervalId);
+          intervalId = setInterval(tick, currentIntervalTarget);
+        }
+      }, 120);
+    }
+
+    function stopInstrument() {
+      running = false;
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+      if (intervalWatcher) {
+        clearInterval(intervalWatcher);
+        intervalWatcher = null;
+      }
+
+      stateEl.textContent = "stopped";
+      stopBtn.disabled = true;
+      restartBtn.disabled = false;
+      startBtn.disabled = true;
+    }
+
+    function restartInstrument() {
+      x = 0.5;
+      r = 3.0;
+      targetR = 3.0;
+      history.length = 0;
+
+      running = true;
+      currentIntervalTarget = 220;
+      startMainLoop();
+
+      stateEl.textContent = "running";
+      stopBtn.disabled = false;
+      restartBtn.disabled = false;
+      startBtn.disabled = true;
+    }
+
     startBtn.addEventListener("click", async () => {
       if (started) return;
 
       const ok = await enableOrientation();
       if (!ok) return;
 
-      await startAudio();
-
-      // 每 120ms 更新一次，比较容易听出分裂感
-      loopId = setInterval(updateSound, 120);
+      await setupAudio();
 
       started = true;
-      stateEl.textContent = "running";
-      startBtn.textContent = "Running";
+      running = true;
+
       startBtn.disabled = true;
+      stopBtn.disabled = false;
+      restartBtn.disabled = false;
+
+      stateEl.textContent = "running";
+      startMainLoop();
+    });
+
+    stopBtn.addEventListener("click", () => {
+      if (!started || !running) return;
+      stopInstrument();
+    });
+
+    restartBtn.addEventListener("click", () => {
+      if (!started) return;
+      restartInstrument();
     });
   </script>
 </body>
