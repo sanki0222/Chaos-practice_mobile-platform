@@ -4,8 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Tilted Bifurcation</title>
+
+  <!-- Tone.js audio library -->
   <script src="https://unpkg.com/tone@14.7.77/build/Tone.js"></script>
+
   <style>
+    /* simple dark UI so the graph and numbers are easy to read */
     body {
       margin: 0;
       font-family: Arial, sans-serif;
@@ -87,20 +91,26 @@
     }
   </style>
 </head>
+
 <body>
+
   <h1>Tilted Bifurcation</h1>
+
+  <!-- short description shown to the user -->
   <p>
     Tilt the phone to perturb the control parameter of a chaotic musical system.
     Small tilt produces relatively stable behaviour. Larger tilt pushes the system
     toward bifurcation and chaos.
   </p>
 
+  <!-- control buttons -->
   <div class="buttons">
     <button id="startBtn">Start</button>
     <button id="pauseBtn" disabled>Pause</button>
     <button id="restartBtn" disabled>Restart</button>
   </div>
 
+  <!-- info panel showing system values -->
   <div class="panel">
     <div class="row"><span class="label">beta:</span> <span id="betaVal">0</span></div>
     <div class="row"><span class="label">r:</span> <span id="rVal">3.00</span></div>
@@ -109,384 +119,520 @@
     <div class="row"><span class="label">state:</span> <span id="state">waiting</span></div>
   </div>
 
+  <!-- canvas used to draw the bifurcation diagram -->
   <canvas id="canvas" width="760" height="260"></canvas>
+
   <div class="hint">Use headphones and tilt the phone slowly.</div>
 
-  <script>
-    const startBtn = document.getElementById("startBtn");
-    const pauseBtn = document.getElementById("pauseBtn");
-    const restartBtn = document.getElementById("restartBtn");
 
-    const betaVal = document.getElementById("betaVal");
-    const rVal = document.getElementById("rVal");
-    const xVal = document.getElementById("xVal");
-    const freqVal = document.getElementById("freqVal");
-    const stateEl = document.getElementById("state");
+<script>
 
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
+/* ------------------------------------------------
+Basic UI elements
+------------------------------------------------ */
 
-    let beta = 0;
-    let targetR = 3.0;
-    let r = 3.0;
-    let x = 0.5;
+const startBtn = document.getElementById("startBtn");
+const pauseBtn = document.getElementById("pauseBtn");
+const restartBtn = document.getElementById("restartBtn");
 
-    let started = false;
-    let running = false;
-    let intervalId = null;
-    let sensorEnabled = false;
+const betaVal = document.getElementById("betaVal");
+const rVal = document.getElementById("rVal");
+const xVal = document.getElementById("xVal");
+const freqVal = document.getElementById("freqVal");
+const stateEl = document.getElementById("state");
 
-    const points = [];
+/* ------------------------------------------------
+Canvas for drawing the bifurcation diagram
+------------------------------------------------ */
 
-    let reverb, feedbackDelay, filter;
-    let synthA, synthB, drone;
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
 
-    // minor-ish pitch pool, good for darker / more unstable feeling
-    const scale = [
-      110, 123.47, 130.81, 146.83, 164.81, 174.61, 196.00,
-      220.00, 246.94, 261.63, 293.66, 329.63, 349.23, 392.00,
-      440.00, 493.88, 523.25, 587.33, 659.25, 698.46, 783.99
-    ];
+/* ------------------------------------------------
+Core variables of the chaotic system
+------------------------------------------------ */
 
-    function clamp(value, min, max) {
-      return Math.max(min, Math.min(max, value));
-    }
+// beta = phone tilt angle
+// r = control parameter of the logistic map
+// x = current state of the system
 
-    function mapRange(value, inMin, inMax, outMin, outMax) {
-      const v = clamp(value, inMin, inMax);
-      return outMin + ((v - inMin) / (inMax - inMin)) * (outMax - outMin);
-    }
+let beta = 0;
+let targetR = 3.0;
+let r = 3.0;
+let x = 0.5;
 
-    function classifyState(rValue) {
-      if (rValue < 3.0) return "stable";
-      if (rValue < 3.45) return "bifurcation";
-      if (rValue < 3.7) return "complex periodic";
-      return "chaotic";
-    }
+/* general state flags */
 
-    function logisticStep() {
-      x = r * x * (1 - x);
-      x = clamp(x, 0.0001, 0.9999);
-      return x;
-    }
+let started = false;
+let running = false;
+let intervalId = null;
+let sensorEnabled = false;
 
-    function quantizePitch(value01) {
-      const idx = Math.floor(value01 * scale.length);
-      return scale[Math.min(idx, scale.length - 1)];
-    }
+/* store points for the bifurcation diagram */
 
-    function drawGraph() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+const points = [];
 
-  // Background reference lines
-  ctx.strokeStyle = "#111";
-  ctx.lineWidth = 1;
+/* ------------------------------------------------
+Audio system variables (Tone.js)
+------------------------------------------------ */
 
-  // Horizontal reference line
-  for (let i = 1; i < 5; i++) {
-    const y = (canvas.height / 5) * i;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(canvas.width, y);
-    ctx.stroke();
-  }
+let reverb, feedbackDelay, filter;
+let synthA, synthB, drone;
 
-  // Vertical reference line
-  for (let i = 1; i < 5; i++) {
-    const xLine = (canvas.width / 5) * i;
-    ctx.beginPath();
-    ctx.moveTo(xLine, 0);
-    ctx.lineTo(xLine, canvas.height);
-    ctx.stroke();
-  }
+/* pitch pool used for quantisation
+keeps chaotic patterns more audible */
 
-  // bifurcation point
-  for (let i = 0; i < points.length; i++) {
-    const p = points[i];
-    ctx.fillStyle = "rgba(0,255,210,0.22)";
-    ctx.fillRect(p.px, p.py, 2, 2);
-  }
+const scale = [
+110,123.47,130.81,146.83,164.81,174.61,196,
+220,246.94,261.63,293.66,329.63,349.23,392,
+440,493.88,523.25,587.33,659.25,698.46,783.99
+];
 
-  // straight line of r
-  const currentPx = mapRange(r, 2.8, 4.0, 0, canvas.width);
-  ctx.fillStyle = "rgba(255,255,255,0.2)";
-  ctx.fillRect(currentPx, 0, 1, canvas.height);
 
-  // point of x
-  const currentPy = canvas.height - x * canvas.height;
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(currentPx - 2, currentPy - 2, 4, 4);
+/* ------------------------------------------------
+Helper functions
+------------------------------------------------ */
 
-  // text
-  ctx.fillStyle = "#888";
-  ctx.font = "14px Arial";
-  ctx.fillText("bifurcation diagram", 12, 20);
-  ctx.fillText("r: " + r.toFixed(3), 12, 40);
+// keep values inside a range
+function clamp(value,min,max){
+return Math.max(min,Math.min(max,value));
 }
 
-    function onOrientation(event) {
-      const rawBeta = event.beta ?? 0;
-      beta = clamp(rawBeta, -45, 45);
-      targetR = mapRange(beta, -45, 45, 2.8, 4.0);
-    }
+// map value from one range to another
+function mapRange(value,inMin,inMax,outMin,outMax){
+const v=clamp(value,inMin,inMax);
+return outMin+((v-inMin)/(inMax-inMin))*(outMax-outMin);
+}
 
-    function togglePause() {
 
-    if (running) {
+/* ------------------------------------------------
+System behaviour classification
+(just for UI display)
+------------------------------------------------ */
 
-    running = false;
+function classifyState(rValue){
+if(rValue<3.0) return "stable";
+if(rValue<3.45) return "bifurcation";
+if(rValue<3.7) return "complex periodic";
+return "chaotic";
+}
 
-    pauseBtn.textContent = "Continue";
 
-    stateEl.textContent = "paused";
+/* ------------------------------------------------
+Logistic map
+x(n+1) = r * x(n) * (1 - x(n))
+------------------------------------------------ */
 
-  } else {
+function logisticStep(){
+x=r*x*(1-x);
+x=clamp(x,0.0001,0.9999);
+return x;
+}
 
-    running = true;
 
-    pauseBtn.textContent = "Pause";
+/* convert chaotic value into musical pitch */
 
-    stateEl.textContent = "running";
+function quantizePitch(value01){
+const idx=Math.floor(value01*scale.length);
+return scale[Math.min(idx,scale.length-1)];
+}
 
-  }
+
+/* ------------------------------------------------
+Draw bifurcation diagram
+------------------------------------------------ */
+
+function drawGraph(){
+
+ctx.clearRect(0,0,canvas.width,canvas.height);
+
+/* reference grid */
+
+ctx.strokeStyle="#111";
+ctx.lineWidth=1;
+
+for(let i=1;i<5;i++){
+const y=(canvas.height/5)*i;
+ctx.beginPath();
+ctx.moveTo(0,y);
+ctx.lineTo(canvas.width,y);
+ctx.stroke();
+}
+
+for(let i=1;i<5;i++){
+const xLine=(canvas.width/5)*i;
+ctx.beginPath();
+ctx.moveTo(xLine,0);
+ctx.lineTo(xLine,canvas.height);
+ctx.stroke();
+}
+
+/* previously generated bifurcation points */
+
+for(let i=0;i<points.length;i++){
+const p=points[i];
+ctx.fillStyle="rgba(0,255,210,0.22)";
+ctx.fillRect(p.px,p.py,2,2);
+}
+
+/* vertical line showing current r value */
+
+const currentPx=mapRange(r,2.8,4.0,0,canvas.width);
+
+ctx.fillStyle="rgba(255,255,255,0.2)";
+ctx.fillRect(currentPx,0,1,canvas.height);
+
+/* current x state */
+
+const currentPy=canvas.height-x*canvas.height;
+
+ctx.fillStyle="#ffffff";
+ctx.fillRect(currentPx-2,currentPy-2,4,4);
+
+/* small labels */
+
+ctx.fillStyle="#888";
+ctx.font="14px Arial";
+ctx.fillText("bifurcation diagram",12,20);
+ctx.fillText("r: "+r.toFixed(3),12,40);
 
 }
 
-    async function enableOrientation() {
-      if (sensorEnabled) return true;
 
-      if (
-        typeof DeviceOrientationEvent !== "undefined" &&
-        typeof DeviceOrientationEvent.requestPermission === "function"
-      ) {
-        try {
-          const permission = await DeviceOrientationEvent.requestPermission();
-          if (permission !== "granted") {
-            alert("Sensor permission was not granted.");
-            return false;
-          }
-        } catch (err) {
-          alert("Permission error: " + err.message);
-          return false;
-        }
-      }
+/* ------------------------------------------------
+Phone orientation
+beta tilt controls r
+------------------------------------------------ */
 
-      window.addEventListener("deviceorientation", onOrientation);
-      sensorEnabled = true;
-      return true;
-    }
+function onOrientation(event){
 
-    async function setupAudio() {
-      await Tone.start();
+const rawBeta=event.beta??0;
 
-      reverb = new Tone.Reverb({
-        decay: 3.5,
-        wet: 0.18
-      });
+beta=clamp(rawBeta,-45,45);
 
-      feedbackDelay = new Tone.FeedbackDelay({
-        delayTime: 0.18,
-        feedback: 0.28,
-        wet: 0.22
-      });
+targetR=mapRange(beta,-45,45,2.8,4.0);
 
-      filter = new Tone.Filter({
-        type: "lowpass",
-        frequency: 1400,
-        Q: 1.2
-      });
+}
 
-      const master = new Tone.Gain(0.9).toDestination();
-      reverb.connect(feedbackDelay);
-      feedbackDelay.connect(filter);
-      filter.connect(master);
 
-      synthA = new Tone.Synth({
-        oscillator: { type: "triangle" },
-        envelope: {
-          attack: 0.01,
-          decay: 0.08,
-          sustain: 0.12,
-          release: 0.2
-        }
-      }).connect(reverb);
+/* ------------------------------------------------
+Pause / resume system
+------------------------------------------------ */
 
-      synthB = new Tone.Synth({
-        oscillator: { type: "sine" },
-        envelope: {
-          attack: 0.005,
-          decay: 0.06,
-          sustain: 0.08,
-          release: 0.16
-        }
-      }).connect(reverb);
+function togglePause(){
 
-      drone = new Tone.Oscillator({
-        frequency: 55,
-        type: "sine",
-        volume: -24
-      }).connect(reverb);
+if(running){
 
-      drone.start();
-    }
+running=false;
+pauseBtn.textContent="Continue";
+stateEl.textContent="paused";
 
-    function updateUI(freqA, state) {
-      betaVal.textContent = beta.toFixed(2);
-      rVal.textContent = r.toFixed(3);
-      xVal.textContent = x.toFixed(4);
-      freqVal.textContent = freqA ? freqA.toFixed(2) + " Hz" : "-";
-      stateEl.textContent = state;
-    }
+}else{
 
-    function tick() {
-      if (!running) return;
+running=true;
+pauseBtn.textContent="Pause";
+stateEl.textContent="running";
 
-      // smooth the control parameter
-      r += (targetR - r) * 0.08;
+}
 
-      const currentX = logisticStep();
-      const state = classifyState(r);
+}
 
-      // main pitch from current x
-      const freqA = quantizePitch(currentX);
 
-      // second voice from transformed x
-      const shadowX = clamp((currentX * currentX + (1 - currentX) * 0.25), 0, 1);
-      const freqB = quantizePitch(shadowX) * 1.5;
+/* ------------------------------------------------
+Enable motion sensors (important for iOS)
+------------------------------------------------ */
 
-      // more chaotic = faster triggering
-      let intervalMs;
-      if (r < 3.0) intervalMs = 320;
-      else if (r < 3.45) intervalMs = 220;
-      else if (r < 3.7) intervalMs = 160;
-      else intervalMs = 95;
+async function enableOrientation(){
 
-      // this gets updated later by resetting the interval when needed
-      currentIntervalTarget = intervalMs;
+if(sensorEnabled) return true;
 
-      // trigger notes
-      const velA = mapRange(r, 2.8, 4.0, 0.45, 0.9);
-      const velB = mapRange(r, 2.8, 4.0, 0.18, 0.5);
+if(typeof DeviceOrientationEvent!=="undefined" &&
+typeof DeviceOrientationEvent.requestPermission==="function"){
 
-      synthA.triggerAttackRelease(freqA, "16n", undefined, velA);
+try{
 
-      // second voice appears more strongly in higher-chaos regions
-      if (r > 3.15) {
-        synthB.triggerAttackRelease(freqB, "32n", undefined, velB);
-      }
+const permission=await DeviceOrientationEvent.requestPermission();
 
-      // drone and filter follow system behaviour
-      const droneFreq = 45 + (r - 2.8) * 22;
-      drone.frequency.rampTo(droneFreq, 0.08);
+if(permission!=="granted"){
+alert("Sensor permission was not granted.");
+return false;
+}
 
-      const cutoff = 500 + currentX * 2400;
-      filter.frequency.rampTo(cutoff, 0.06);
+}catch(err){
 
-      feedbackDelay.feedback.rampTo(mapRange(r, 2.8, 4.0, 0.18, 0.42), 0.08);
-      feedbackDelay.wet.rampTo(mapRange(r, 2.8, 4.0, 0.12, 0.32), 0.08);
+alert("Permission error: "+err.message);
+return false;
 
-      const px = mapRange(r, 2.8, 4.0, 0, canvas.width);
-      const py = canvas.height - currentX * canvas.height;
+}
 
-      points.push({ px, py });
+}
 
-      if (points.length > 3500) points.shift();
+window.addEventListener("deviceorientation",onOrientation);
+sensorEnabled=true;
+return true;
 
-      updateUI(freqA, state);
-      drawGraph();
-    }
+}
 
-    let currentIntervalTarget = 220;
-    let intervalWatcher = null;
 
-    function startMainLoop() {
-      if (intervalId) clearInterval(intervalId);
-      intervalId = setInterval(tick, currentIntervalTarget);
+/* ------------------------------------------------
+Audio setup
+------------------------------------------------ */
 
-      if (intervalWatcher) clearInterval(intervalWatcher);
-      intervalWatcher = setInterval(() => {
-        if (!running) return;
-        const activeDelay = intervalId ? true : false;
-        if (!activeDelay) return;
+async function setupAudio(){
 
-        // adapt trigger speed to current chaos state
-        let wanted;
-        if (r < 3.0) wanted = 320;
-        else if (r < 3.45) wanted = 220;
-        else if (r < 3.7) wanted = 160;
-        else wanted = 95;
+await Tone.start();
 
-        if (wanted !== currentIntervalTarget) {
-          currentIntervalTarget = wanted;
-          clearInterval(intervalId);
-          intervalId = setInterval(tick, currentIntervalTarget);
-        }
-      }, 120);
-    }
+/* spatial effects */
 
-    // function stopInstrument() {
-    //   running = false;
-    //   if (intervalId) {
-    //     clearInterval(intervalId);
-    //     intervalId = null;
-    //   }
-    //   if (intervalWatcher) {
-    //     clearInterval(intervalWatcher);
-    //     intervalWatcher = null;
-    //   }
+reverb=new Tone.Reverb({decay:3.5,wet:0.18});
 
-    //   stateEl.textContent = "stopped";
-    //   pauseBtn.disabled = true;
-    //   restartBtn.disabled = false;
-    //   startBtn.disabled = true;
-    // }
+feedbackDelay=new Tone.FeedbackDelay({
+delayTime:0.18,
+feedback:0.28,
+wet:0.22
+});
 
-    function restartInstrument() {
-      x = 0.5;
-      r = 3.0;
-      targetR = 3.0;
-      points.length = 0;
+filter=new Tone.Filter({
+type:"lowpass",
+frequency:1400,
+Q:1.2
+});
 
-      running = true;
-      currentIntervalTarget = 220;
-      startMainLoop();
+const master=new Tone.Gain(0.9).toDestination();
 
-      stateEl.textContent = "running";
-      pauseBtn.disabled = false;
-      restartBtn.disabled = false;
-      startBtn.disabled = true;
-    }
+reverb.connect(feedbackDelay);
+feedbackDelay.connect(filter);
+filter.connect(master);
 
-    startBtn.addEventListener("click", async () => {
-      if (started) return;
 
-      const ok = await enableOrientation();
-      if (!ok) return;
+/* main synth voice */
 
-      await setupAudio();
+synthA=new Tone.Synth({
+oscillator:{type:"triangle"},
+envelope:{attack:0.01,decay:0.08,sustain:0.12,release:0.2}
+}).connect(reverb);
 
-      started = true;
-      running = true;
 
-      startBtn.disabled = true;
-      pauseBtn.disabled = false;
-      restartBtn.disabled = false;
+/* secondary voice */
 
-      stateEl.textContent = "running";
-      pauseBtn.textContent = "Pause";
-      
-      startMainLoop();
-    });
+synthB=new Tone.Synth({
+oscillator:{type:"sine"},
+envelope:{attack:0.005,decay:0.06,sustain:0.08,release:0.16}
+}).connect(reverb);
 
-    pauseBtn.addEventListener("click", () => {
-      if (!started) return;
-      togglePause();
-    });
 
-    restartBtn.addEventListener("click", () => {
-      if (!started) return;
-      restartInstrument();
-    });
-  </script>
+/* low drone layer */
+
+drone=new Tone.Oscillator({
+frequency:55,
+type:"sine",
+volume:-24
+}).connect(reverb);
+
+drone.start();
+
+}
+
+
+/* ------------------------------------------------
+Update UI values
+------------------------------------------------ */
+
+function updateUI(freqA,state){
+betaVal.textContent=beta.toFixed(2);
+rVal.textContent=r.toFixed(3);
+xVal.textContent=x.toFixed(4);
+freqVal.textContent=freqA?freqA.toFixed(2)+" Hz":"-";
+stateEl.textContent=state;
+}
+
+/* ------------------------------------------------
+Main system tick
+------------------------------------------------ */
+
+function tick(){
+if(!running) return;
+
+/* smooth control parameter */
+
+r+=(targetR-r)*0.08;
+const currentX=logisticStep();
+const state=classifyState(r);
+
+/* main pitch */
+
+const freqA=quantizePitch(currentX);
+
+/* second voice from nonlinear transform */
+
+const shadowX=clamp((currentX*currentX+(1-currentX)*0.25),0,1);
+const freqB=quantizePitch(shadowX)*1.5;
+
+
+/* rhythm speed depends on chaos level */
+
+let intervalMs;
+
+if(r<3.0) intervalMs=320;
+else if(r<3.45) intervalMs=220;
+else if(r<3.7) intervalMs=160;
+else intervalMs=95;
+
+currentIntervalTarget=intervalMs;
+
+/* trigger synth voices */
+
+const velA=mapRange(r,2.8,4.0,0.45,0.9);
+const velB=mapRange(r,2.8,4.0,0.18,0.5);
+
+synthA.triggerAttackRelease(freqA,"16n",undefined,velA);
+
+if(r>3.15){
+synthB.triggerAttackRelease(freqB,"32n",undefined,velB);
+}
+
+/* drone follows system state */
+
+const droneFreq=45+(r-2.8)*22;
+drone.frequency.rampTo(droneFreq,0.08);
+
+/* filter follows chaotic value */
+
+const cutoff=500+currentX*2400;
+filter.frequency.rampTo(cutoff,0.06);
+
+feedbackDelay.feedback.rampTo(mapRange(r,2.8,4.0,0.18,0.42),0.08);
+feedbackDelay.wet.rampTo(mapRange(r,2.8,4.0,0.12,0.32),0.08);
+
+/* add point to diagram */
+
+const px=mapRange(r,2.8,4.0,0,canvas.width);
+const py=canvas.height-currentX*canvas.height;
+
+points.push({px,py});
+
+if(points.length>3500) points.shift();
+updateUI(freqA,state);
+drawGraph();
+}
+
+
+/* ------------------------------------------------
+Timing control
+------------------------------------------------ */
+
+let currentIntervalTarget=220;
+let intervalWatcher=null;
+
+function startMainLoop(){
+
+if(intervalId) clearInterval(intervalId);
+
+intervalId=setInterval(tick,currentIntervalTarget);
+
+if(intervalWatcher) clearInterval(intervalWatcher);
+
+intervalWatcher=setInterval(()=>{
+
+if(!running) return;
+
+let wanted;
+
+if(r<3.0) wanted=320;
+else if(r<3.45) wanted=220;
+else if(r<3.7) wanted=160;
+else wanted=95;
+
+if(wanted!==currentIntervalTarget){
+
+currentIntervalTarget=wanted;
+
+clearInterval(intervalId);
+
+intervalId=setInterval(tick,currentIntervalTarget);
+
+}
+
+},120);
+
+}
+
+
+/* ------------------------------------------------
+Restart system
+------------------------------------------------ */
+
+function restartInstrument(){
+
+x=0.5;
+r=3.0;
+targetR=3.0;
+
+points.length=0;
+
+running=true;
+
+currentIntervalTarget=220;
+
+startMainLoop();
+
+stateEl.textContent="running";
+
+pauseBtn.disabled=false;
+restartBtn.disabled=false;
+startBtn.disabled=true;
+
+}
+
+
+/* ------------------------------------------------
+UI buttons
+------------------------------------------------ */
+
+startBtn.addEventListener("click",async()=>{
+
+if(started) return;
+
+const ok=await enableOrientation();
+
+if(!ok) return;
+
+await setupAudio();
+
+started=true;
+running=true;
+
+startBtn.disabled=true;
+pauseBtn.disabled=false;
+restartBtn.disabled=false;
+
+stateEl.textContent="running";
+
+pauseBtn.textContent="Pause";
+
+startMainLoop();
+
+});
+
+
+pauseBtn.addEventListener("click",()=>{
+
+if(!started) return;
+
+togglePause();
+
+});
+
+
+restartBtn.addEventListener("click",()=>{
+
+if(!started) return;
+
+restartInstrument();
+
+});
+
+</script>
+
 </body>
 </html>
