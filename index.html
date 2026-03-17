@@ -381,6 +381,7 @@ Audio setup
 async function setupAudio(){
 
 await Tone.start();
+console.log("audio started", Tone.context.state);
 
 /* spatial effects */
 
